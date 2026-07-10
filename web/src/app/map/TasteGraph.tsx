@@ -2,10 +2,59 @@
 
 import { useEffect, useState, useMemo, useRef } from "react";
 import dynamic from "next/dynamic";
+import { Roboto_Mono } from "next/font/google";
 import { gsap } from "gsap";
 import { forceCollide, forceX, forceY } from "d3-force-3d";
 
+const robotoMono = Roboto_Mono({ subsets: ["latin"], weight: ["500", "700"] });
+
 const ForceGraph2D = dynamic(() => import("react-force-graph-2d"), { ssr: false });
+
+function drawClusterLabel(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  cx: number,
+  cy: number
+) {
+  const label = text.toUpperCase();
+  const fontPx = 11;
+  ctx.font = `700 ${fontPx}px ${robotoMono.style.fontFamily}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  const textW = ctx.measureText(label).width;
+  const padX = fontPx * 0.9;
+  const padY = fontPx * 0.7;
+  const halfW = textW / 2 + padX;
+  const halfH = fontPx / 2 + padY;
+  const corner = fontPx * 0.55;
+
+  ctx.fillStyle = "#0a0a0a";
+  ctx.fillRect(cx - halfW, cy - halfH, halfW * 2, halfH * 2);
+
+  ctx.strokeStyle = "rgba(255,255,255,0.25)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(cx - halfW, cy - halfH, halfW * 2, halfH * 2);
+
+  ctx.strokeStyle = "rgba(255,255,255,0.75)";
+  ctx.lineWidth = 1.2;
+  const corners: [number, number, number, number][] = [
+    [cx - halfW, cy - halfH, 1, 1],
+    [cx + halfW, cy - halfH, -1, 1],
+    [cx - halfW, cy + halfH, 1, -1],
+    [cx + halfW, cy + halfH, -1, -1],
+  ];
+  for (const [x, y, dx, dy] of corners) {
+    ctx.beginPath();
+    ctx.moveTo(x + corner * dx, y);
+    ctx.lineTo(x, y);
+    ctx.lineTo(x, y + corner * dy);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = "rgba(255,255,255,0.85)";
+  ctx.fillText(label, cx, cy);
+}
 
 interface D3ForceLike {
   strength?: (v: number) => D3ForceLike;
@@ -44,7 +93,7 @@ type GraphData = {
 const DOT_RADIUS = 2;
 const THUMB_SIZE = 34; // world-space size, so it scales naturally with zoom
 const GAP = 6;
-const NODE_SPACING = 60; // min distance between node centers, keeps thumbnails from overlapping
+const NODE_SPACING = 95; // min distance between node centers, keeps thumbnails + cluster label clear
 
 function formatDate(iso: string) {
   const d = new Date(iso);
@@ -66,6 +115,7 @@ export default function TasteGraph() {
   const aspectCache = useRef<Map<string, number>>(new Map());
   const fgRef = useRef<ForceGraphInstance | undefined>(undefined);
   const cameraRef = useRef({ k: 1, x: 0, y: 0 });
+  const anchorsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
 
   useEffect(() => {
     fetch("/api/graph")
@@ -96,30 +146,31 @@ export default function TasteGraph() {
     const categories = Array.from(
       new Set(data.nodes.map((n) => n.category).filter((c): c is string => !!c))
     );
-    const anchorRadius = 140 + categories.length * 30;
+    const anchorRadius = 110 + categories.length * 22;
     const anchors = new Map(
       categories.map((cat, i) => {
         const angle = (2 * Math.PI * i) / categories.length;
         return [cat, { x: Math.cos(angle) * anchorRadius, y: Math.sin(angle) * anchorRadius }];
       })
     );
+    anchorsRef.current = anchors;
 
     const id = setInterval(() => {
       const fg = fgRef.current;
       if (!fg) return;
-      fg.d3Force("charge")?.strength?.(-140);
-      fg.d3Force("link")?.distance?.(NODE_SPACING * 1.4);
+      fg.d3Force("charge")?.strength?.(-120);
+      fg.d3Force("link")?.distance?.(NODE_SPACING * 1.6);
       fg.d3Force("collide", forceCollide(NODE_SPACING));
       fg.d3Force(
         "x",
         forceX((node: unknown) => anchors.get((node as GraphNode).category ?? "")?.x ?? 0).strength(
-          (node: unknown) => ((node as GraphNode).category ? 0.12 : 0)
+          (node: unknown) => ((node as GraphNode).category ? 0.25 : 0)
         )
       );
       fg.d3Force(
         "y",
         forceY((node: unknown) => anchors.get((node as GraphNode).category ?? "")?.y ?? 0).strength(
-          (node: unknown) => ((node as GraphNode).category ? 0.12 : 0)
+          (node: unknown) => ((node as GraphNode).category ? 0.25 : 0)
         )
       );
       clearInterval(id);
@@ -180,7 +231,7 @@ export default function TasteGraph() {
   }
 
   return (
-    <div className="relative">
+    <div className={`relative ${robotoMono.className}`}>
       <ForceGraph2D
         ref={fgRef as never}
         graphData={graphInput as never}
@@ -191,6 +242,23 @@ export default function TasteGraph() {
           cameraRef.current = t;
         }}
         onNodeClick={handleNodeClick}
+        onRenderFramePost={(ctx: CanvasRenderingContext2D) => {
+          const bounds = new Map<string, { sumX: number; sumY: number; count: number }>();
+          for (const n of data.nodes) {
+            if (!n.category) continue;
+            const x = n.x ?? 0;
+            const y = n.y ?? 0;
+            const entry = bounds.get(n.category) ?? { sumX: 0, sumY: 0, count: 0 };
+            entry.sumX += x;
+            entry.sumY += y;
+            entry.count += 1;
+            bounds.set(n.category, entry);
+          }
+          bounds.forEach(({ sumX, sumY, count }, category) => {
+            if (count <= 3) return;
+            drawClusterLabel(ctx, category, sumX / count, sumY / count);
+          });
+        }}
         linkCanvasObjectMode={() => "replace"}
         linkCanvasObject={(link: unknown, ctx: CanvasRenderingContext2D, globalScale: number) => {
           const l = link as { source: GraphNode; target: GraphNode };
@@ -199,7 +267,7 @@ export default function TasteGraph() {
           ctx.beginPath();
           ctx.moveTo(l.source.x ?? 0, l.source.y ?? 0);
           ctx.lineTo(l.target.x ?? 0, l.target.y ?? 0);
-          ctx.strokeStyle = "rgba(220,220,220,0.4)";
+          ctx.strokeStyle = "rgba(145,145,145,0.3)";
           ctx.lineWidth = 1 / globalScale;
           ctx.stroke();
         }}
