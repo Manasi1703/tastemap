@@ -62,8 +62,14 @@ interface D3ForceLike {
 }
 
 interface ForceGraphInstance {
-  centerAt: (x: number, y: number, ms?: number) => void;
-  zoom: (k: number, ms?: number) => void;
+  centerAt: {
+    (): { x: number; y: number };
+    (x: number, y: number, ms?: number): void;
+  };
+  zoom: {
+    (): number;
+    (k: number, ms?: number): void;
+  };
   d3Force: (name: string, force?: unknown) => D3ForceLike | undefined;
 }
 
@@ -111,6 +117,7 @@ function imageRect(n: GraphNode, aspect: number) {
 export default function TasteGraph() {
   const [data, setData] = useState<GraphData | null>(null);
   const [selected, setSelected] = useState<GraphNode | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const imageCache = useRef<Map<string, HTMLImageElement>>(new Map());
   const aspectCache = useRef<Map<string, number>>(new Map());
   const fgRef = useRef<ForceGraphInstance | undefined>(undefined);
@@ -140,17 +147,37 @@ export default function TasteGraph() {
     return { nodes: data.nodes, links: data.links };
   }, [data]);
 
+  const categoryCounts = useMemo(() => {
+    if (!data) return [];
+    const counts = new Map<string, number>();
+    for (const n of data.nodes) {
+      if (!n.category) continue;
+      counts.set(n.category, (counts.get(n.category) ?? 0) + 1);
+    }
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+  }, [data]);
+
+  const summaryText = useMemo(() => {
+    if (categoryCounts.length === 0) return "";
+    const cap = (s: string) => s.replace(/\b\w/g, (c) => c.toUpperCase());
+    const [top, ...rest] = categoryCounts.map(([c]) => cap(c));
+    if (!rest.length) return `You're gravitating toward ${top}.`;
+    const runnersUp = rest.slice(0, 2);
+    return `You're gravitating toward ${top}, with strong ${runnersUp.join(" and ")} influences.`;
+  }, [categoryCounts]);
+
   useEffect(() => {
     if (!data) return;
 
     const categories = Array.from(
       new Set(data.nodes.map((n) => n.category).filter((c): c is string => !!c))
     );
-    const anchorRadius = 110 + categories.length * 22;
+    const baseRadius = 110 + categories.length * 22;
     const anchors = new Map(
       categories.map((cat, i) => {
-        const angle = (2 * Math.PI * i) / categories.length;
-        return [cat, { x: Math.cos(angle) * anchorRadius, y: Math.sin(angle) * anchorRadius }];
+        const angle = (2 * Math.PI * i) / categories.length + (Math.random() - 0.5) * 0.9;
+        const radius = baseRadius * (0.45 + Math.random() * 0.75);
+        return [cat, { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius }];
       })
     );
     anchorsRef.current = anchors;
@@ -195,18 +222,54 @@ export default function TasteGraph() {
     setSelected(null);
   }
 
+  function syncCameraFromLive(fg: ForceGraphInstance) {
+    const center = fg.centerAt();
+    cameraRef.current = { x: center.x, y: center.y, k: fg.zoom() };
+  }
+
   function handleNodeClick(node: unknown) {
     const n = node as GraphNode;
     setSelected(n);
 
     const fg = fgRef.current;
     if (!fg || n.x == null || n.y == null) return;
+    syncCameraFromLive(fg);
 
     gsap.to(cameraRef.current, {
       x: n.x,
       y: n.y,
       k: 2.2,
       duration: 0.7,
+      ease: "power3.inOut",
+      onUpdate: () => {
+        fg.centerAt(cameraRef.current.x, cameraRef.current.y, 0);
+        fg.zoom(cameraRef.current.k, 0);
+      },
+    });
+  }
+
+  function handleClusterZoom(category: string) {
+    const fg = fgRef.current;
+    if (!fg || !data) return;
+
+    const nodesInCluster = data.nodes.filter((n) => n.category === category);
+    if (nodesInCluster.length === 0) return;
+    syncCameraFromLive(fg);
+
+    const xs = nodesInCluster.map((n) => n.x ?? 0);
+    const ys = nodesInCluster.map((n) => n.y ?? 0);
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+    const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 80);
+
+    const viewportW = typeof window !== "undefined" ? window.innerWidth : 1200;
+    const targetZoom = Math.min(Math.max((viewportW * 0.5) / span, 0.7), 3.2);
+
+    gsap.to(cameraRef.current, {
+      x: cx,
+      y: cy,
+      k: targetZoom,
+      duration: 0.8,
       ease: "power3.inOut",
       onUpdate: () => {
         fg.centerAt(cameraRef.current.x, cameraRef.current.y, 0);
@@ -239,7 +302,11 @@ export default function TasteGraph() {
         nodeLabel={() => ""}
         nodeRelSize={DOT_RADIUS}
         onZoom={(t: { k: number; x: number; y: number }) => {
-          cameraRef.current = t;
+          // Mutate in place: replacing the object would orphan any gsap tween
+          // currently animating cameraRef.current (see handleClusterZoom).
+          cameraRef.current.x = t.x;
+          cameraRef.current.y = t.y;
+          cameraRef.current.k = t.k;
         }}
         onNodeClick={handleNodeClick}
         onRenderFramePost={(ctx: CanvasRenderingContext2D) => {
@@ -331,6 +398,53 @@ export default function TasteGraph() {
         width={typeof window !== "undefined" ? window.innerWidth : 800}
         height={typeof window !== "undefined" ? window.innerHeight - 88 : 600}
       />
+
+      <div
+        className={`absolute right-0 top-0 h-full transition-transform duration-300 ${
+          sidebarOpen ? "translate-x-0" : "translate-x-full"
+        }`}
+      >
+        <button
+          onClick={() => setSidebarOpen((v) => !v)}
+          className="absolute -left-8 top-6 flex h-8 w-8 items-center justify-center rounded-l-lg border border-r-0 border-white/10 bg-[#0a0a0a] text-white/50 hover:text-white"
+          aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+        >
+          {sidebarOpen ? "›" : "‹"}
+        </button>
+
+        <div className="h-full w-72 overflow-y-auto border-l border-white/10 bg-[#0a0a0a]/95 p-5 backdrop-blur">
+          <h2 className="text-xs font-medium uppercase tracking-wide text-white/40">
+            Your aesthetic
+          </h2>
+
+          {summaryText && (
+            <p className="mt-2 text-sm leading-snug text-white/80">{summaryText}</p>
+          )}
+
+          <p className="mt-3 text-xs text-white/30">
+            {categoryCounts.length} style{categoryCounts.length === 1 ? "" : "s"} identified
+            across {data.nodes.length} saves
+          </p>
+
+          <div className="mt-5 flex flex-wrap gap-2 border-t border-white/10 pt-4">
+            {categoryCounts.map(([category, count]) => (
+              <button
+                key={category}
+                onClick={() => handleClusterZoom(category)}
+                className={`rounded-full border px-3 py-1.5 text-xs transition ${robotoMono.className} border-white/15 bg-white/5 text-white/70 hover:border-white/40 hover:bg-white/10 hover:text-white`}
+              >
+                {category.toUpperCase()}
+                <span className="ml-1.5 text-white/35">{count}</span>
+              </button>
+            ))}
+            {categoryCounts.length === 0 && (
+              <p className="text-xs text-white/30">
+                Nothing tagged yet — save a few more items.
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
 
       {selected && (
         <div
