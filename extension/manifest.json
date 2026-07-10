@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "TasteMap",
+  "version": "0.1.0",
+  "description": "Save anything you like into your taste map.",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Save to TasteMap"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": ["activeTab", "storage", "contextMenus"],
+  "host_permissions": [
+    "http://localhost:3000/*",
+    "https://*.tastemap.app/*",
+    "<all_urls>"
+  ]
+}
