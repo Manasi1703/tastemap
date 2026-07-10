@@ -25,7 +25,7 @@ export async function classifyImage(imageBuffer: Buffer): Promise<ClipResult> {
   const image = await RawImage.fromBlob(blob);
 
   const output = await classifier(image, STYLE_LABELS as unknown as string[], {
-    hypothesis_template: "a photo in the {} aesthetic",
+    hypothesis_template: "an image in the {} aesthetic",
   });
   const ranked = (Array.isArray(output) ? output : [output]) as {
     label: string;
