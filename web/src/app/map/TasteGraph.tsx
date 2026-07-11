@@ -121,8 +121,20 @@ export default function TasteGraph() {
   const imageCache = useRef<Map<string, HTMLImageElement>>(new Map());
   const aspectCache = useRef<Map<string, number>>(new Map());
   const fgRef = useRef<ForceGraphInstance | undefined>(undefined);
+  const [container, setContainer] = useState<HTMLDivElement | null>(null);
   const cameraRef = useRef({ k: 1, x: 0, y: 0 });
   const anchorsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
+  const [isPanning, setIsPanning] = useState(false);
+
+  useEffect(() => {
+    if (!container) return;
+    const update = () => setDimensions({ width: container.clientWidth, height: container.clientHeight });
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [container]);
 
   useEffect(() => {
     fetch("/api/graph")
@@ -294,7 +306,14 @@ export default function TasteGraph() {
   }
 
   return (
-    <div className={`relative ${robotoMono.className}`}>
+    <div
+      ref={setContainer}
+      className={`absolute inset-0 ${robotoMono.className}`}
+      style={{ cursor: isPanning ? "grabbing" : "grab" }}
+      onPointerDown={() => setIsPanning(true)}
+      onPointerUp={() => setIsPanning(false)}
+      onPointerLeave={() => setIsPanning(false)}
+    >
       <ForceGraph2D
         ref={fgRef as never}
         graphData={graphInput as never}
@@ -395,8 +414,8 @@ export default function TasteGraph() {
           ctx.fillStyle = color;
           ctx.fillRect(rect.x, rect.y, rect.w, y - rect.y);
         }}
-        width={typeof window !== "undefined" ? window.innerWidth : 800}
-        height={typeof window !== "undefined" ? window.innerHeight - 88 : 600}
+        width={dimensions.width}
+        height={dimensions.height}
       />
 
       <div
@@ -412,16 +431,21 @@ export default function TasteGraph() {
           {sidebarOpen ? "›" : "‹"}
         </button>
 
-        <div className="h-full w-72 overflow-y-auto border-l border-white/10 bg-[#0a0a0a]/95 p-5 backdrop-blur">
-          <h2 className="text-xs font-medium uppercase tracking-wide text-white/40">
+        <div
+          className="h-full w-72 overflow-y-auto border-l border-white/10 bg-[#0a0a0a]/95 p-5 backdrop-blur"
+          style={{ fontFamily: "Helvetica, Arial, sans-serif" }}
+        >
+          <h1 className="text-lg font-light tracking-tight">TasteMap</h1>
+
+          <h2 className="mt-5 text-base font-medium uppercase tracking-wide text-white/40">
             Your aesthetic
           </h2>
 
           {summaryText && (
-            <p className="mt-2 text-sm leading-snug text-white/80">{summaryText}</p>
+            <p className="mt-2 text-base leading-snug text-white/80">{summaryText}</p>
           )}
 
-          <p className="mt-3 text-xs text-white/30">
+          <p className="mt-3 text-sm text-white/30">
             {categoryCounts.length} style{categoryCounts.length === 1 ? "" : "s"} identified
             across {data.nodes.length} saves
           </p>
