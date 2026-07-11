@@ -42,6 +42,7 @@ export const STYLE_LABELS = [
   "ethereal",
   "kitsch",
   "glitch art",
+  "pixel art",
   "flat illustration",
   "vector illustration",
   "graphic design poster",
